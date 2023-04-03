@@ -1,16 +1,21 @@
+import sys
+from pprint import pprint
+from typing import List
+
 import numpy as np
 from PIL import Image
+import pygame as pg
 
-image = Image.open('./images/image1.jpg')
-max_depth = 8
-diff = np.array([10, 10, 10])
+DIFF = np.array([10, 10, 10])
+MAX_DEPTH = 8
 
 
 class QuadTree:
     class QuadNode:
-        def __init__(self, x, y, width, height, img, color=None):
+        def __init__(self, img: Image, x, y, width, height, color=None):
             self.x = x
             self.y = y
+
             self.w = width
             self.h = height
             self.image = img.crop((x, y, width + x, height + y))
@@ -21,18 +26,23 @@ class QuadTree:
             return not self.children
 
         def split_to_four(self):
-            child_size = (self.w // 2, self.h // 2)
+            child_size = (self.w / 2, self.h / 2)
             self.children.append(
-                QuadTree.QuadNode(self.x, self.y, *child_size, image))
+                QuadTree.QuadNode(self.image, self.x, self.y,
+                                  *child_size))
             self.children.append(
-                QuadTree.QuadNode(self.x + child_size[0], self.y, *child_size,
-                                  image))
+                QuadTree.QuadNode(self.image, self.x + child_size[0], self.y,
+                                  *child_size))
             self.children.append(
-                QuadTree.QuadNode(self.x, self.y + child_size[1], *child_size,
-                                  image))
+                QuadTree.QuadNode(self.image, self.x, self.y + child_size[1],
+                                  *child_size))
             self.children.append(
-                QuadTree.QuadNode(self.x + child_size[0], self.y +
-                                  child_size[1], *child_size, image))
+                QuadTree.QuadNode(self.image, self.x + child_size[0], self.y +
+                                  child_size[1], *child_size))
+
+        def render(self, screen, is_border):
+            box_rect = pg.Rect(self.x, self.y, self.w, self.h)
+            pg.draw.rect(screen, self.color, box_rect)
 
         def get_all_nodes(self):
             all_nodes = [self]
@@ -43,13 +53,16 @@ class QuadTree:
         def set_color(self, color):
             self.color = color
 
+        def __repr__(self):
+            return f"Node({self.x}, {self.y}, {self.w}, {self.h}, color={self.color}"
+
     def __init__(self, img):
         self.img = img
-        self.root_node = QuadTree.QuadNode(0, 0, *image.size, img)
+        self.root_node = QuadTree.QuadNode(img, 0, 0, *self.img.size)
 
     def build(self):
         def build_inner(cur_node, cur_color, depth=0):
-            if depth >= max_depth:
+            if depth >= MAX_DEPTH:
                 cur_node.set_color(cur_color)
                 return
 
@@ -80,6 +93,24 @@ class QuadTree:
         _print_nodes(self.root_node)
         print("#" * 20)
 
+    def render(self, screen, is_border):
+        leaves = self.find_leaves()
+        pprint(leaves)
+        for leaf in leaves:
+            leaf.render(screen, is_border)
+
+    def find_leaves(self) -> List["QuadTree.QuadNode"]:
+        def find_leaves_inner(cur_node: "QuadTree.QuadNode"):
+            if cur_node.is_leaf():
+                return [cur_node]
+            else:
+                leaves = []
+                for child in cur_node.children:
+                    leaves.extend(find_leaves_inner(child))
+                return leaves
+
+        return find_leaves_inner(self.root_node)
+
 
 def get_average_color(img, x, y, width, height):
     box = (x, y, x + width, y + height)
@@ -98,7 +129,7 @@ def should_divide(img, cur_color, x, y, width, height):
     avg_rt = get_average_color(img, x + width // 2, y, width // 2,
                                height // 2)
     avgs = [avg_rt, avg_lt, avg_rb, avg_lb]
-    res = any([all(abs(avg_all - avg) > diff) for avg in avgs])
+    res = any([all(abs(avg_all - avg) > DIFF) for avg in avgs])
     if res:
         return res, avgs
     return res, avg_all
@@ -113,7 +144,24 @@ def saving(img, size, rgb):  # пока только для самого изо�
     result.save("./images/compressed.jpg")
 
 
-if __name__ == '__main__':
+def main(image_path):
+    image = Image.open(image_path)
+
+    pg.init()
+    screen = pg.display.set_mode(image.size)
     pic = QuadTree(image)
     pic.build()
     pic.print_nodes()
+    pic.render(screen, False)
+    pg.display.flip()
+
+    while True:
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                sys.exit()
+
+
+if __name__ == '__main__':
+    main('./images/image1.jpg')
+
