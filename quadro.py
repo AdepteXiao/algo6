@@ -1,18 +1,22 @@
+import argparse
+import os
 import sys
+import threading
 from math import ceil
 from pprint import pprint
 from typing import List
 import cProfile
 import cv2
 from threading import Thread
+from queue import Queue
 
 import numpy as np
-from PIL import Image, ImageStat
+from PIL import Image
 import pygame as pg
 
-DIFF = np.array([10, 10, 10])
+DIFF = np.array([5, 5, 5])
 MAX_DEPTH = 1
-IS_BORDERS = True
+IS_BORDERS = False
 
 
 class QuadTree:
@@ -46,7 +50,7 @@ class QuadTree:
                 QuadTree.QuadNode(self.image, self.x + child_w, self.y +
                                   child_h, child_w, child_h))
 
-        def render(self, screen, is_border):  # сделать границы
+        def render(self, screen):
             box_rect = pg.Rect(self.x, self.y, self.w, self.h)
             pg.draw.rect(screen, self.color, box_rect)
             if IS_BORDERS:
@@ -71,22 +75,34 @@ class QuadTree:
 
     def build(self):
         def build_inner(cur_node, cur_color, depth=0):
+            lock = threading.Lock()
             if depth >= MAX_DEPTH:
-                cur_node.set_color(cur_color)
+                with lock:
+                    cur_node.set_color(cur_color)
                 return
             if cur_node.w == 1 or cur_node.h == 1:
+                with lock:
+                    cur_node.set_color(cur_color)
                 return
 
             resp, cols = should_divide(self.img, cur_color,
                                        cur_node.x, cur_node.y, cur_node.w,
                                        cur_node.h)
             if resp is False:
-                cur_node.set_color(cur_color)
+                with lock:
+                    cur_node.set_color(cur_color)
                 return
-
-            cur_node.split_to_four()
+            with lock:
+                cur_node.split_to_four()
+            threads = []
             for node, col in zip(cur_node.children, cols):
-                build_inner(node, col, depth + 1)
+                thread = threading.Thread(target=build_inner,
+                                          args=(node, col, depth + 1))
+                thread.start()
+                threads.append(thread)
+
+            for process in threads:
+                process.join()
 
         self.root_node.children.clear()
         build_inner(self.root_node,
@@ -105,11 +121,10 @@ class QuadTree:
         _print_nodes(self.root_node)
         print("#" * 20)
 
-    def render(self, screen, is_border):
+    def render(self, screen):
         leaves = self.find_leaves()
-        # pprint(leaves)
         for leaf in leaves:
-            leaf.render(screen, is_border)
+            leaf.render(screen)
 
     def find_leaves(self) -> List["QuadTree.QuadNode"]:
         def find_leaves_inner(cur_node: "QuadTree.QuadNode"):
@@ -141,8 +156,7 @@ def should_divide(img, cur_color, x, y, width, height):
                                x1 + half_w, y1 + half_h)
     avg_rt = get_average_color(img, x1 := x + half_w, y1 := y, x1 + half_w,
                                y1 + half_h)
-    avgs = [avg_rt, avg_lt, avg_rb, avg_lb]
-    # print(cur_color, all([all(abs(avg_all - avg) < DIFF) for avg in avgs]))
+    avgs = [avg_lt, avg_rt, avg_lb, avg_rb]
     res = not all([all(abs(avg_all - avg) < DIFF) for avg in avgs])
     if res:
         return res, avgs
@@ -151,23 +165,23 @@ def should_divide(img, cur_color, x, y, width, height):
 
 def build_and_render(pic, screen):
     pic.build()
-    pic.render(screen, False)
+    pic.render(screen)
     pg.display.flip()
 
 
-# def saving(img, size, rgb):  # пока только для самого изображения
-#     result = Image.new("RGB", (img.width, img.height))
-#     r, g, b = rgb
-#     for x in range(size[0]):
-#         for y in range(size[1]):
-#             result.putpixel((x, y), (r, g, b))
-#     result.save("./images/compressed.jpg")
-
-
 def main():
+    parser = argparse.ArgumentParser(description='QuadTree image processing')
+    parser.add_argument('input_path', metavar='input_path', type=str,
+                        help='Path to input image file')
+    parser.add_argument('-o', '--output_path', type=str,
+                        help='Path to output image file')
+    args = parser.parse_args()
+    if not os.path.isfile(args.input_path):
+        print(f"File not found: {args.input_path}")
+        sys.exit()
     global MAX_DEPTH
-    image_path = './images/image2.jpg'
-    image = Image.open(image_path)
+    # image_path = './images/image4.jpg'
+    image = Image.open(args.input_path)
     image = image.convert("RGBA")
 
     pg.init()
@@ -181,12 +195,17 @@ def main():
                 pg.quit()
                 sys.exit()
             if event.type == pg.KEYDOWN:
-                if event.key == pg.K_UP:
+                if event.key == pg.K_UP and MAX_DEPTH <= 7:
                     MAX_DEPTH += 1
                     build_and_render(pic, screen)
-                elif event.key == pg.K_DOWN:
+                elif event.key == pg.K_DOWN and MAX_DEPTH >= 0:
                     MAX_DEPTH -= 1
                     build_and_render(pic, screen)
+                elif event.key == pg.K_RETURN:
+                    # pg.image.save(screen, './images/image_new.jpg')
+                    output_path = args.output_path or './images/image_new.jpg'
+                    pg.image.save(screen, output_path)
+
 
 
 if __name__ == '__main__':
